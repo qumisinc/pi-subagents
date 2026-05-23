@@ -7,6 +7,8 @@ import { resolveMcpDirectToolNames } from "./mcp-direct-tool-allowlist.ts";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const TASK_ARG_LIMIT = 8000;
+const CONFIG_DIR_NAME = ".pi";
+const APPEND_SYSTEM_FILENAME = "APPEND_SYSTEM.md";
 const PROMPT_RUNTIME_EXTENSION_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-prompt-runtime.ts");
 const FANOUT_CHILD_EXTENSION_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "extension", "fanout-child.ts");
 export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
@@ -131,7 +133,24 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
 		const stem = (input.promptFileStem ?? "prompt").replace(/[^\w.-]/g, "_");
 		const promptPath = path.join(tempDir, `${stem}.md`);
-		fs.writeFileSync(promptPath, input.systemPrompt, { mode: 0o600 });
+
+		let promptContent = input.systemPrompt;
+		if (input.systemPromptMode === "append") {
+			// Pi SDK's resource-loader uses ?? (nullish coalescing) to resolve
+			// append sources: CLI --append-system-prompt overrides file discovery
+			// of APPEND_SYSTEM.md entirely. Merge them here so append-mode agents
+			// don't lose the workspace's APPEND_SYSTEM.md (e.g. gateway prompt).
+			const cwd = input.cwd || process.cwd();
+			const appendPath = path.join(cwd, CONFIG_DIR_NAME, APPEND_SYSTEM_FILENAME);
+			try {
+				const workspaceAppend = fs.readFileSync(appendPath, "utf-8");
+				promptContent = `${workspaceAppend}\n\n${promptContent}`;
+			} catch {
+				// No workspace APPEND_SYSTEM.md — proceed with just the agent body
+			}
+		}
+
+		fs.writeFileSync(promptPath, promptContent, { mode: 0o600 });
 		args.push(input.systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt", promptPath);
 	}
 

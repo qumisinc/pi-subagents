@@ -654,4 +654,103 @@ describe("buildPiArgs system prompt mode wiring", () => {
 
 		assert.ok(args.includes("--system-prompt"));
 	});
+
+	it("merges workspace APPEND_SYSTEM.md with agent body in append mode", () => {
+		const fixture = createMcpFixture();
+		const piDir = path.join(fixture.projectDir, ".pi");
+		fs.mkdirSync(piDir, { recursive: true });
+		fs.writeFileSync(path.join(piDir, "APPEND_SYSTEM.md"), "Gateway composed prompt content", "utf-8");
+
+		const { args, tempDir } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			systemPrompt: "Agent body instructions",
+			systemPromptMode: "append",
+			inheritProjectContext: false,
+			inheritSkills: false,
+			cwd: fixture.projectDir,
+		});
+
+		assert.ok(args.includes("--append-system-prompt"));
+		const promptIdx = args.indexOf("--append-system-prompt");
+		const promptPath = args[promptIdx + 1]!;
+		const content = fs.readFileSync(promptPath, "utf-8");
+		assert.ok(content.startsWith("Gateway composed prompt content"), "should start with workspace APPEND_SYSTEM.md");
+		assert.ok(content.endsWith("Agent body instructions"), "should end with agent body");
+		assert.ok(content.includes("\n\n"), "should have separator between merged parts");
+		if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("does not merge APPEND_SYSTEM.md in replace mode", () => {
+		const fixture = createMcpFixture();
+		const piDir = path.join(fixture.projectDir, ".pi");
+		fs.mkdirSync(piDir, { recursive: true });
+		fs.writeFileSync(path.join(piDir, "APPEND_SYSTEM.md"), "Gateway composed prompt content", "utf-8");
+
+		const { args, tempDir } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			systemPrompt: "Agent body instructions",
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
+			inheritSkills: false,
+			cwd: fixture.projectDir,
+		});
+
+		assert.ok(args.includes("--system-prompt"));
+		const promptIdx = args.indexOf("--system-prompt");
+		const promptPath = args[promptIdx + 1]!;
+		const content = fs.readFileSync(promptPath, "utf-8");
+		assert.equal(content, "Agent body instructions", "replace mode should not merge APPEND_SYSTEM.md");
+		if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("proceeds with just agent body when no APPEND_SYSTEM.md exists in append mode", () => {
+		const fixture = createMcpFixture();
+
+		const { args, tempDir } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			systemPrompt: "Agent body instructions",
+			systemPromptMode: "append",
+			inheritProjectContext: false,
+			inheritSkills: false,
+			cwd: fixture.projectDir,
+		});
+
+		assert.ok(args.includes("--append-system-prompt"));
+		const promptIdx = args.indexOf("--append-system-prompt");
+		const promptPath = args[promptIdx + 1]!;
+		const content = fs.readFileSync(promptPath, "utf-8");
+		assert.equal(content, "Agent body instructions", "should use just the agent body when no APPEND_SYSTEM.md");
+		if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("uses process.cwd() when no explicit cwd is provided in append mode", () => {
+		const fixture = createMcpFixture();
+		const piDir = path.join(fixture.projectDir, ".pi");
+		fs.mkdirSync(piDir, { recursive: true });
+		fs.writeFileSync(path.join(piDir, "APPEND_SYSTEM.md"), "Workspace prompt", "utf-8");
+		process.chdir(fixture.projectDir);
+
+		const { args, tempDir } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			systemPrompt: "Agent body",
+			systemPromptMode: "append",
+			inheritProjectContext: false,
+			inheritSkills: false,
+		});
+
+		const promptIdx = args.indexOf("--append-system-prompt");
+		const promptPath = args[promptIdx + 1]!;
+		const content = fs.readFileSync(promptPath, "utf-8");
+		assert.ok(content.startsWith("Workspace prompt"), "should discover APPEND_SYSTEM.md from cwd");
+		assert.ok(content.endsWith("Agent body"));
+		if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+	});
 });
