@@ -8,6 +8,119 @@
 
 https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1
 
+## Qumis Fork
+
+This is the `qumisinc/pi-subagents` fork of [`nicobailon/pi-subagents`](https://github.com/nicobailon/pi-subagents).
+
+### What this fork adds
+
+**1. `extensions` field in `agentOverrides` settings**
+
+Allows propagating Pi extensions (e.g. `pi-web-access`) to specific builtin subagents via `/workspace/.pi/settings.json`. The gateway writes extension overrides for `researcher` and `context-builder` so they get web tools (`web_search`, `fetch_content`) deterministically via `--extension` CLI flags. Not yet supported upstream.
+
+**2. APPEND_SYSTEM.md merge for append-mode agents**
+
+Fixes a context inheritance gap caused by the Pi SDK's `resource-loader.ts`, where the `--append-system-prompt` CLI flag overrides file-based discovery of `APPEND_SYSTEM.md` (using `??` nullish coalescing). Without this fix, append-mode agents (like `delegate`) lose the gateway's composed system prompt — the instructions that give children insurance rules, safety constraints, citation format, and workspace guidance.
+
+The fix is in `buildPiArgs()` (`src/runs/shared/pi-args.ts`): when `systemPromptMode === "append"`, it reads `{cwd}/.pi/APPEND_SYSTEM.md` from disk and prepends it to the agent body before writing the temp file. This ensures the single CLI flag carries both the gateway prompt and the agent's own instructions.
+
+### Context inheritance in the Qumis sandbox
+
+Understanding what context each child subagent receives is critical for building custom agents. The full picture involves three mechanisms: Pi SDK file auto-discovery, pi-subagents CLI flags, and the subagent prompt runtime extension.
+
+#### System prompt delivery
+
+The gateway writes its composed system prompt (identity, safety, insurance rules, citations, workspace layout, document corpus) to `/workspace/.pi/APPEND_SYSTEM.md`. Child Pi CLI processes run with `cwd: "/workspace"` and create their own `DefaultResourceLoader`, which scans for `APPEND_SYSTEM.md` at startup.
+
+How the child receives the gateway prompt depends on `systemPromptMode`:
+
+| `systemPromptMode` | CLI flag | How APPEND_SYSTEM.md reaches the child |
+|---------------------|----------|----------------------------------------|
+| `"replace"` (default) | `--system-prompt <agent.md>` | Auto-discovered by Pi SDK (no CLI conflict) |
+| `"append"` | `--append-system-prompt <agent.md>` | Merged by `buildPiArgs` (fork fix) |
+
+Both modes now consistently receive the gateway's prompt.
+
+#### Session context (conversation history)
+
+| `defaultContext` | Session flag | What the child sees |
+|------------------|-------------|---------------------|
+| `"fresh"` (default) | `--no-session` | Empty history — only the task string |
+| `"fork"` | `--session <branched_file>` | Parent's full conversation history |
+
+Pi SDK session files store conversation messages only — the system prompt is always reconstructed from file discovery + CLI flags, not carried in the session.
+
+#### Prompt rewriting in the child
+
+The `subagent-prompt-runtime.ts` extension runs inside every child as a `before_agent_start` hook. It receives the fully composed `event.systemPrompt` (including auto-discovered or merged APPEND_SYSTEM.md) and modifies it:
+
+- Strips `# Project Context` section if `PI_SUBAGENT_INHERIT_PROJECT_CONTEXT=0`
+- Strips skills section if `PI_SUBAGENT_INHERIT_SKILLS=0`
+- Always strips the `pi-subagents` orchestration skill
+- Prepends child boundary instructions
+
+It also filters forked conversation messages to remove parent-only orchestration artifacts.
+
+#### Complete inheritance matrix
+
+| Agent config | Gets gateway prompt? | Gets conversation history? | Gets project context? |
+|-------------|---------------------|---------------------------|----------------------|
+| Replace + fresh (most builtins) | Yes (auto-discovered) | No | No (stripped) |
+| Replace + fork | Yes (auto-discovered) | Yes (branched session) | Depends on frontmatter |
+| Append + fresh | Yes (merged by fork) | No | Depends on frontmatter |
+| Append + fork (delegate default) | Yes (merged by fork) | Yes (branched session) | Yes (delegate default) |
+
+#### Creating a full-context custom agent
+
+For maximum context (gateway prompt + conversation history + project context + skills):
+
+```yaml
+---
+name: full-context-analyst
+description: Analyst with complete parent context
+defaultContext: fork
+inheritProjectContext: true
+inheritSkills: true
+systemPromptMode: append
+tools: read, write, edit, bash, grep, find, ls, contact_supervisor
+---
+
+Your domain-specific instructions here...
+```
+
+`append` is recommended for full-context agents — the child gets Pi's base prompt + gateway APPEND_SYSTEM.md + agent instructions, all layered. `fork` adds the parent's conversation history. `inheritProjectContext: true` preserves project context.
+
+### How the sandbox consumes this fork
+
+The `qumis-sandbox` gateway references this fork in `gateway/package.json`:
+
+```json
+"pi-subagents": "git+https://github.com/qumisinc/pi-subagents.git#main"
+```
+
+The dependency is pinned to `main`. **Do not force-push `main`** — the lockfile pins a specific commit SHA, and force-pushing makes old SHAs unreachable, breaking `npm ci` in Docker builds.
+
+### Branch rules
+
+- **`main`**: stable branch consumed by the sandbox. Merge feature branches here; never force-push.
+- **Feature branches**: develop and rebase freely, then merge (fast-forward) into `main`.
+
+### Syncing with upstream
+
+```bash
+cd repos/pi-subagents
+git fetch upstream
+git merge upstream/main
+```
+
+Sync before each sandbox image rebuild or monthly (whichever comes first).
+
+### Exit criteria
+
+When upstream accepts both the `extensions` field in `agentOverrides` and the APPEND_SYSTEM.md merge fix (or an equivalent `resource-loader.ts` change that merges CLI + file sources), switch `gateway/package.json` back to the npm registry package and archive this fork.
+
+---
+
 ## Installation
 
 ```bash
@@ -404,7 +517,7 @@ Use these fields when an agent should see more:
 
 | Field | Effect |
 |-------|--------|
-| `systemPromptMode: append` | Append the agent prompt to Pi’s normal base prompt. |
+| `systemPromptMode: append` | Append the agent prompt to Pi’s normal base prompt. In the Qumis fork, the workspace’s `APPEND_SYSTEM.md` is also merged (see [Context inheritance in the Qumis sandbox](#context-inheritance-in-the-qumis-sandbox)). |
 | `inheritProjectContext: true` | Keep inherited project instructions from files like `AGENTS.md` and `CLAUDE.md`. |
 | `inheritSkills: true` | Let the child see Pi’s discovered skills catalog. |
 | `defaultContext: fork` | Use forked session context when a launch omits `context`; explicit `context: "fresh"` still wins. |
