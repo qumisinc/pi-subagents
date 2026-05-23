@@ -70,6 +70,119 @@ It also filters forked conversation messages to remove parent-only orchestration
 | Append + fresh | Yes (merged by fork) | No | Depends on frontmatter |
 | Append + fork (delegate default) | Yes (merged by fork) | Yes (branched session) | Yes (delegate default) |
 
+#### Where parent context lives and how it reaches the child
+
+The parent and child are separate OS processes — they share no memory. The filesystem is the communication channel.
+
+```
+═══════════════════════════════════════════════════════════════
+               WHERE PARENT CONTEXT LIVES (on disk)
+═══════════════════════════════════════════════════════════════
+
+Gateway pi-agent-process.ts writes at startup:
+
+  /workspace/.pi/APPEND_SYSTEM.md   ← Gateway's composed system prompt
+  │  Contains:                         (this is the main context payload)
+  │  • IDENTITY ("Qumis Clerk")
+  │  • COPILOT_THINKING_PROMPT (reasoning rules, insurance heuristics)
+  │  • SAFETY rules
+  │  • INSURANCE_ANALYSIS_RULES (analysis methodology, deliverables)
+  │  • TOOLS_POINTER (available tools + reference file pointers)
+  │  • GATEWAY_INSTRUCTIONS_PI (ask_user usage, permissions)
+  │  • workspaceSection() (workspace layout, output rules)
+  │  • CITATIONS_INSTRUCTIONS (inline citation format)
+  │  • FOLLOWUP_CONTENT_RULES
+  │  • Embedded WORKSPACE_FILES content:
+  │     • AGENTS.md (available agents)
+  │     • DOCUMENTS.md (full OCR document corpus)
+  │     • REPORT.md, HISTORY.md
+  │
+  /workspace/.pi/settings.json      ← Model + extension overrides
+  /workspace/.pi/mcp.json           ← MCP server config
+  ~/.pi/agent/models.json           ← LLM proxy config (if google)
+
+Parent session (conversation history):
+
+  /workspace/.pi/sessions/*.jsonl   ← All user/assistant messages
+
+Already on disk (injected by Rails at chat activation):
+
+  /workspace/.pi/agents/*.md        ← Agent definitions
+  /workspace/.pi/skills/*/SKILL.md  ← Skills (qumis-docx, etc.)
+  /workspace/CLAUDE.md              ← Project context
+  /workspace/documents/*            ← User uploads + OCR text
+
+
+═══════════════════════════════════════════════════════════════
+         HOW EACH PIECE REACHES THE CHILD
+═══════════════════════════════════════════════════════════════
+
+Parent calls subagent({ agent: "researcher", task: "..." })
+  │
+  ▼
+pi-subagents buildPiArgs() constructs CLI args:
+  │
+  │  System prompt (one of two paths):
+  │  ┌───────────────────────────────────────────────────┐
+  │  │ REPLACE MODE (researcher, worker, scout, etc.)    │
+  │  │  → --system-prompt <agent.md>                     │
+  │  │  → No --append-system-prompt                      │
+  │  │  → APPEND_SYSTEM.md left for auto-discovery       │
+  │  ├───────────────────────────────────────────────────┤
+  │  │ APPEND MODE (delegate, custom full-context)       │
+  │  │  → Reads /workspace/.pi/APPEND_SYSTEM.md    ◄──── fork fix
+  │  │  → Prepends to agent .md body                     │
+  │  │  → --append-system-prompt <combined file>         │
+  │  └───────────────────────────────────────────────────┘
+  │
+  │  Session (conversation history):
+  │  ├── fresh: --no-session              (no history)
+  │  └── fork:  --session <branched.jsonl> (full parent history)
+  │
+  │  Also: --model, --tools, --extension, env vars
+  │
+  ▼
+spawn("pi", [...args], { cwd: "/workspace" })
+  │
+  ▼
+Child Pi CLI starts in /workspace/
+  │
+  │  1. DefaultResourceLoader.reload()
+  │     Scans /workspace/.pi/ for:
+  │     • SYSTEM.md         → base prompt (usually absent)
+  │     • APPEND_SYSTEM.md  → auto-discovered (replace mode)
+  │                            or skipped (append mode, CLI overrides)
+  │     • skills, settings, project context files
+  │
+  │  2. buildSystemPrompt() assembles:
+  │     ┌────────────────────────┬───────────────────────────┐
+  │     │    REPLACE MODE        │      APPEND MODE          │
+  │     ├────────────────────────┼───────────────────────────┤
+  │     │ 1. Agent .md body      │ 1. Pi default base prompt │
+  │     │ 2. APPEND_SYSTEM.md    │ 2. Gateway APPEND_SYSTEM  │
+  │     │    (auto-discovered)   │    + Agent .md body       │
+  │     │ 3. Project context     │    (merged by buildPiArgs)│
+  │     │ 4. Skills              │ 3. Project context        │
+  │     │ 5. Date + cwd         │ 4. Skills                 │
+  │     │                        │ 5. Date + cwd            │
+  │     └────────────────────────┴───────────────────────────┘
+  │
+  │  3. before_agent_start hooks:
+  │     subagent-prompt-runtime.ts:
+  │     • Strips project context (if inheritProjectContext=false)
+  │     • Strips skills (if inheritSkills=false)
+  │     • Strips pi-subagents orchestration skill (always)
+  │     • Prepends child boundary instructions
+  │
+  │  4. Session loaded (if fork):
+  │     • Parent conversation history from branched .jsonl
+  │     • Orchestration messages filtered out
+  │     • System prompt NOT in session (always rebuilt above)
+  │
+  ▼
+Child executes task with composed prompt + optional history
+```
+
 #### Creating a full-context custom agent
 
 For maximum context (gateway prompt + conversation history + project context + skills):
