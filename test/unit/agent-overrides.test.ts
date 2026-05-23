@@ -224,6 +224,101 @@ describe("builtin agent overrides", () => {
 		);
 	});
 
+	it("applies extensions override from user settings", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: {
+				agentOverrides: {
+					researcher: {
+						extensions: ["/path/to/pi-web-access"],
+					},
+				},
+			},
+		});
+
+		const researcher = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "researcher");
+		assert.ok(researcher);
+		assert.deepEqual(researcher.extensions, ["/path/to/pi-web-access"]);
+	});
+
+	it("applies extensions: false to clear agent extensions", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: {
+				agentOverrides: {
+					researcher: {
+						extensions: false,
+					},
+				},
+			},
+		});
+
+		const researcher = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "researcher");
+		assert.ok(researcher);
+		assert.equal(researcher.extensions, undefined);
+	});
+
+	it("merges override extensions with existing agent extensions via deduplication", () => {
+		writeProjectAgent(tempProject, "custom-researcher", [
+			"---",
+			"name: researcher",
+			"description: Custom researcher with extensions",
+			"extensions: /existing/ext",
+			"---",
+			"",
+			"Custom researcher agent.",
+		].join("\n"));
+
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: {
+				agentOverrides: {
+					researcher: {
+						extensions: ["/existing/ext", "/new/ext"],
+					},
+				},
+			},
+		});
+
+		const researcher = discoverAgentsAll(tempProject).builtin.find((agent) => agent.name === "researcher");
+		assert.ok(researcher);
+		assert.deepEqual(researcher.extensions, ["/existing/ext", "/new/ext"]);
+	});
+
+	it("rejects non-array non-false extensions values", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: {
+				agentOverrides: {
+					researcher: {
+						extensions: "not-an-array",
+					},
+				},
+			},
+		});
+
+		assert.throws(
+			() => discoverAgents(tempProject, "both"),
+			(error: unknown) => error instanceof Error
+				&& error.message.includes("researcher")
+				&& error.message.includes("extensions"),
+		);
+	});
+
+	it("preserves existing overrides when adding extensions", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: {
+				agentOverrides: {
+					researcher: {
+						model: "google/gemini-flash",
+						extensions: ["/path/to/pi-web-access"],
+					},
+				},
+			},
+		});
+
+		const researcher = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "researcher");
+		assert.ok(researcher);
+		assert.equal(researcher.model, "google/gemini-flash");
+		assert.deepEqual(researcher.extensions, ["/path/to/pi-web-access"]);
+	});
+
 	it("builds false sentinels when an override clears builtin fields", () => {
 		const override = buildBuiltinOverrideConfig(
 			{
@@ -238,6 +333,7 @@ describe("builtin agent overrides", () => {
 				skills: ["safe-bash"],
 				tools: ["bash"],
 				mcpDirectTools: ["xcodebuild_list_sims"],
+				extensions: ["/path/to/ext"],
 				completionGuard: false,
 			},
 			{
@@ -252,6 +348,7 @@ describe("builtin agent overrides", () => {
 				skills: undefined,
 				tools: undefined,
 				mcpDirectTools: undefined,
+				extensions: undefined,
 				completionGuard: true,
 			},
 		);
@@ -265,7 +362,34 @@ describe("builtin agent overrides", () => {
 			defaultContext: false,
 			skills: false,
 			tools: false,
+			extensions: false,
 			completionGuard: true,
+		});
+	});
+
+	it("buildBuiltinOverrideConfig detects added extensions", () => {
+		const override = buildBuiltinOverrideConfig(
+			{
+				model: undefined,
+				systemPromptMode: "append",
+				inheritProjectContext: true,
+				inheritSkills: false,
+				systemPrompt: "Base prompt",
+				completionGuard: true,
+			},
+			{
+				model: undefined,
+				systemPromptMode: "append",
+				inheritProjectContext: true,
+				inheritSkills: false,
+				systemPrompt: "Base prompt",
+				extensions: ["/path/to/pi-web-access"],
+				completionGuard: true,
+			},
+		);
+
+		assert.deepEqual(override, {
+			extensions: ["/path/to/pi-web-access"],
 		});
 	});
 });

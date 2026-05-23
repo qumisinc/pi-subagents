@@ -46,6 +46,7 @@ export interface BuiltinAgentOverrideBase {
 	skills?: string[];
 	tools?: string[];
 	mcpDirectTools?: string[];
+	extensions?: string[];
 	completionGuard?: boolean;
 }
 
@@ -61,6 +62,7 @@ interface BuiltinAgentOverrideConfig {
 	systemPrompt?: string;
 	skills?: string[] | false;
 	tools?: string[] | false;
+	extensions?: string[] | false;
 	completionGuard?: boolean;
 }
 
@@ -186,6 +188,7 @@ function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 		skills: agent.skills ? [...agent.skills] : undefined,
 		tools: agent.tools ? [...agent.tools] : undefined,
 		mcpDirectTools: agent.mcpDirectTools ? [...agent.mcpDirectTools] : undefined,
+		extensions: agent.extensions ? [...agent.extensions] : undefined,
 		completionGuard: agent.completionGuard,
 	};
 }
@@ -205,6 +208,7 @@ function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentO
 		...(override.systemPrompt !== undefined ? { systemPrompt: override.systemPrompt } : {}),
 		...(override.skills !== undefined ? { skills: override.skills === false ? false : [...override.skills] } : {}),
 		...(override.tools !== undefined ? { tools: override.tools === false ? false : [...override.tools] } : {}),
+		...(override.extensions !== undefined ? { extensions: override.extensions === false ? false : [...override.extensions] } : {}),
 		...(override.completionGuard !== undefined ? { completionGuard: override.completionGuard } : {}),
 	};
 }
@@ -364,6 +368,9 @@ function parseBuiltinOverrideEntry(
 	const tools = parseOverrideStringArrayOrFalse(input.tools, { filePath, name, field: "tools" });
 	if (tools !== undefined) override.tools = tools;
 
+	const extensions = parseOverrideStringArrayOrFalse(input.extensions, { filePath, name, field: "extensions" });
+	if (extensions !== undefined) override.extensions = extensions;
+
 	return Object.keys(override).length > 0 ? override : undefined;
 }
 
@@ -422,6 +429,16 @@ function applyBuiltinOverride(
 		next.tools = tools;
 		next.mcpDirectTools = mcpDirectTools;
 	}
+	if (override.extensions !== undefined) {
+		if (override.extensions === false) {
+			next.extensions = undefined;
+		} else {
+			next.extensions = [...new Set([
+				...(next.extensions ?? []),
+				...override.extensions,
+			])];
+		}
+	}
 	if (override.completionGuard !== undefined) next.completionGuard = override.completionGuard;
 
 	return next;
@@ -462,7 +479,7 @@ function applyBuiltinOverrides(
 
 export function buildBuiltinOverrideConfig(
 	base: BuiltinAgentOverrideBase,
-	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools" | "completionGuard">,
+	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools" | "completionGuard" | "extensions">,
 ): BuiltinAgentOverrideConfig | undefined {
 	const override: BuiltinAgentOverrideConfig = {};
 
@@ -480,6 +497,9 @@ export function buildBuiltinOverrideConfig(
 	const baseTools = joinToolList(base);
 	const draftTools = joinToolList(draft);
 	if (!arraysEqual(draftTools, baseTools)) override.tools = draftTools ? [...draftTools] : false;
+	if (!arraysEqual(draft.extensions, base.extensions)) {
+		override.extensions = draft.extensions ? [...draft.extensions] : false;
+	}
 	if ((draft.completionGuard !== false) !== (base.completionGuard !== false)) {
 		override.completionGuard = draft.completionGuard !== false;
 	}
