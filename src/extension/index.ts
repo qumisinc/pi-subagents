@@ -58,6 +58,8 @@ import {
 } from "./control-notices.ts";
 
 export { loadConfig } from "./config.ts";
+export { setSubagentLifecycleCallbacks } from "../shared/lifecycle-types.ts";
+export type { SubagentLifecycleCallbacks, ProgressSnapshot } from "../shared/lifecycle-types.ts";
 
 /**
  * Derive subagent session base directory from parent session file.

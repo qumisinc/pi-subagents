@@ -114,6 +114,7 @@ interface ParallelChainRunInput {
 	worktreeSetup?: WorktreeSetup;
 	maxSubagentDepth: number;
 	nestedRoute?: NestedRouteInfo;
+	toolCallId?: string;
 }
 
 function buildChainExecutionDetails(input: ChainExecutionDetailsInput): Details {
@@ -251,6 +252,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				availableModels: input.availableModels,
 				preferredModelProvider: input.ctx.model?.provider,
 				skills: behavior.skills === false ? [] : behavior.skills,
+				toolCallId: input.toolCallId,
 				onUpdate: input.onUpdate
 					? (progressUpdate) => {
 						const stepResults = progressUpdate.details?.results || [];
@@ -337,6 +339,7 @@ interface ChainExecutionParams {
 	nestedRoute?: NestedRouteInfo;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	toolCallId?: string;
 }
 
 interface ChainExecutionResult {
@@ -598,6 +601,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					nestedRoute: params.nestedRoute,
 					worktreeSetup,
 					maxSubagentDepth: params.maxSubagentDepth,
+					toolCallId: params.toolCallId,
 				});
 				globalTaskIndex += step.parallel.length;
 
@@ -803,6 +807,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				availableModels,
 				preferredModelProvider: ctx.model?.provider,
 				skills: behavior.skills === false ? [] : behavior.skills,
+				toolCallId: params.toolCallId,
 				onUpdate: onUpdate
 					? (p) => {
 						const stepResults = p.details?.results || [];

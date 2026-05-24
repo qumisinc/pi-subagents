@@ -63,6 +63,7 @@ import {
 	shouldEscalateMutatingFailures,
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
+import { getSubagentLifecycleCallbacks, type ProgressSnapshot } from "../../shared/lifecycle-types.ts";
 
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 
@@ -215,6 +216,26 @@ async function runSingleAttempt(
 			windowsHide: true,
 		});
 		const jsonlWriter = createJsonlWriter(shared.jsonlPath, proc.stdout);
+
+		// Fire lifecycle onChildStarted
+		if (options.toolCallId) {
+			const callbacks = getSubagentLifecycleCallbacks();
+			if (callbacks?.onChildStarted) {
+				const sessionPath = options.sessionFile
+					|| (options.sessionDir ? options.sessionDir : undefined);
+				if (sessionPath) {
+					try {
+						callbacks.onChildStarted(
+							options.toolCallId,
+							agent.name,
+							sessionPath,
+							{ index: options.index ?? 0, runId: options.runId },
+						);
+					} catch { /* callback errors must not affect execution */ }
+				}
+			}
+		}
+
 		let buf = "";
 		let processClosed = false;
 		let settled = false;
@@ -408,6 +429,25 @@ async function runSingleAttempt(
 			emitUpdateSnapshot(getFinalOutput(result.messages) || "(running...)");
 		};
 
+		const fireLifecycleActivity = (now: number) => {
+			if (!options.toolCallId) return;
+			const callbacks = getSubagentLifecycleCallbacks();
+			if (!callbacks?.onChildActivity) return;
+			const snapshot: ProgressSnapshot = {
+				currentTool: progress.currentTool,
+				currentToolArgs: progress.currentToolArgs,
+				currentPath: progress.currentPath,
+				toolCount: progress.toolCount,
+				durationMs: now - startTime,
+				lastActivityAt: progress.lastActivityAt,
+				recentTools: progress.recentTools.slice(-5).map((t) => ({ ...t })),
+				tokens: { input: result.usage.input, output: result.usage.output },
+			};
+			try {
+				callbacks.onChildActivity(options.toolCallId, agent.name, snapshot);
+			} catch { /* callback errors must not affect execution */ }
+		};
+
 		const processLine = (line: string) => {
 			if (!line.trim()) return;
 			jsonlWriter.writeLine(line);
@@ -440,6 +480,7 @@ async function runSingleAttempt(
 				observedMutationAttempt = observedMutationAttempt || mutates;
 				pendingToolResult = { tool: evt.toolName ?? "tool", path: progress.currentPath, mutates, startedAt: now };
 				fireUpdate();
+				fireLifecycleActivity(now);
 			}
 
 			if (evt.type === "tool_execution_end") {
@@ -455,6 +496,7 @@ async function runSingleAttempt(
 				progress.currentToolStartedAt = undefined;
 				progress.currentPath = undefined;
 				fireUpdate();
+				fireLifecycleActivity(now);
 			}
 
 			if (evt.type === "message_end" && evt.message) {
@@ -912,6 +954,21 @@ export async function runSync(
 	} else if (shareEnabled && options.sessionDir) {
 		const sessionFile = findLatestSessionFile(options.sessionDir);
 		if (sessionFile) result.sessionFile = sessionFile;
+	}
+
+	// Fire lifecycle onChildCompleted
+	if (options.toolCallId && artifactPathsResult?.metadataPath) {
+		const callbacks = getSubagentLifecycleCallbacks();
+		if (callbacks?.onChildCompleted) {
+			try {
+				callbacks.onChildCompleted(
+					options.toolCallId,
+					agentName,
+					artifactPathsResult.metadataPath,
+					{ index: options.index ?? 0, runId: options.runId },
+				);
+			} catch { /* callback errors must not affect execution */ }
+		}
 	}
 
 	return result;

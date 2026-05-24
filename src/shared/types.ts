@@ -554,6 +554,7 @@ export interface RunSyncOptions {
 	onUpdate?: (r: import("@earendil-works/pi-agent-core").AgentToolResult<Details>) => void;
 	onControlEvent?: (event: ControlEvent) => void;
 	controlConfig?: ResolvedControlConfig;
+	toolCallId?: string;
 	intercomSessionName?: string;
 	orchestratorIntercomTarget?: string;
 	maxOutput?: MaxOutputConfig;
