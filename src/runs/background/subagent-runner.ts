@@ -1442,7 +1442,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				for (let t = 0; t < group.parallel.length; t++) {
 					const fi = groupStartFlatIndex + t;
 					const sessionTokens = config.sessionDir
-						? parseSessionTokens(path.join(config.sessionDir, `parallel-${t}`))
+						? await parseSessionTokens(path.join(config.sessionDir, `parallel-${t}`))
 						: null;
 					const taskTokens = sessionTokens ?? tokenUsageFromAttempts(parallelResults[t]?.modelAttempts);
 					if (!taskTokens) continue;
@@ -1558,7 +1558,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				artifactPaths: singleResult.artifactPaths,
 			});
 
-			const cumulativeTokens = config.sessionDir ? parseSessionTokens(config.sessionDir) : null;
+			const cumulativeTokens = config.sessionDir ? await parseSessionTokens(config.sessionDir) : null;
 			let stepTokens: TokenUsage | null = cumulativeTokens
 				? {
 						input: cumulativeTokens.input - previousCumulativeTokens.input,

@@ -5,14 +5,14 @@ import { describe, it } from "node:test";
 import { createTempDir, removeTempDir, tryImport } from "../support/helpers.ts";
 
 interface SessionTokensModule {
-	parseSessionTokens(sessionDir: string): { input: number; output: number; total: number } | null;
+	parseSessionTokens(sessionDir: string): Promise<{ input: number; output: number; total: number } | null>;
 }
 
 const tokensMod = await tryImport<SessionTokensModule>("./src/shared/session-tokens.ts");
 const available = !!tokensMod;
 
 describe("session tokens", { skip: !available ? "pi packages not available" : undefined }, () => {
-	it("parses token usage from session message entries", () => {
+	it("parses token usage from session message entries", async () => {
 		const sessionDir = createTempDir("pi-subagent-session-tokens-");
 		try {
 			const sessionFile = path.join(sessionDir, "2026-01-01T00-00-00-000Z_test.jsonl");
@@ -34,14 +34,14 @@ describe("session tokens", { skip: !available ? "pi packages not available" : un
 			].join("\n");
 			fs.writeFileSync(sessionFile, lines + "\n", "utf-8");
 
-			const tokens = tokensMod!.parseSessionTokens(sessionDir);
+			const tokens = await tokensMod!.parseSessionTokens(sessionDir);
 			assert.deepEqual(tokens, { input: 200, output: 50, total: 250 });
 		} finally {
 			removeTempDir(sessionDir);
 		}
 	});
 
-	it("uses the newest session file by mtime when multiple files exist", () => {
+	it("uses the newest session file by mtime when multiple files exist", async () => {
 		const sessionDir = createTempDir("pi-subagent-session-tokens-");
 		try {
 			const olderFile = path.join(sessionDir, "z-last-lexicographically.jsonl");
@@ -53,7 +53,7 @@ describe("session tokens", { skip: !available ? "pi packages not available" : un
 			fs.utimesSync(olderFile, olderTime, olderTime);
 			fs.utimesSync(newerFile, newerTime, newerTime);
 
-			const tokens = tokensMod!.parseSessionTokens(sessionDir);
+			const tokens = await tokensMod!.parseSessionTokens(sessionDir);
 			assert.deepEqual(tokens, { input: 90, output: 10, total: 100 });
 		} finally {
 			removeTempDir(sessionDir);
