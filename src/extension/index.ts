@@ -18,7 +18,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { discoverAgents } from "../agents/agents.ts";
+import { allowPerCallModelOverride, discoverAgents } from "../agents/agents.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
@@ -328,9 +328,23 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		return new SubagentControlNoticeComponent({ ...details, noticeText: formatSubagentControlNotice(details, content) }, theme);
 	});
 
+	// `model` on a subagent call is model choice by the calling LLM. Deployments
+	// that need a deterministic model per agent set subagents.allowPerCallOverride
+	// = false; agent definitions and settings overrides are unaffected.
+	const stripDisallowedModelOverride = (params: SubagentParamsLike, cwd: string): SubagentParamsLike => {
+		const requested = [params.model, ...(params.tasks ?? []).map((task) => task?.model)].filter(Boolean);
+		if (requested.length === 0 || allowPerCallModelOverride(cwd)) return params;
+		console.error(`[subagent] per-call model override disabled; ignoring requested model(s): ${requested.join(", ")}`);
+		return {
+			...params,
+			model: undefined,
+			...(params.tasks ? { tasks: params.tasks.map((task) => ({ ...task, model: undefined })) } : {}),
+		};
+	};
+
 	const executeSubagentCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
-		return executor.execute(id, params, signal, onUpdate, ctx);
+		return executor.execute(id, stripDisallowedModelOverride(params, ctx.cwd), signal, onUpdate, ctx);
 	};
 
 	const slashBridge = registerSlashSubagentBridge({

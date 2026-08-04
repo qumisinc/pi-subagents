@@ -1,5 +1,6 @@
 ---
 name: scout
+tier: utility
 description: Fast codebase recon that returns compressed context for handoff
 tools: read, grep, find, ls, bash, write, intercom
 thinking: low

@@ -1,5 +1,6 @@
 ---
 name: worker
+tier: reasoning
 description: Implementation agent for normal tasks and approved oracle handoffs
 thinking: high
 systemPromptMode: replace

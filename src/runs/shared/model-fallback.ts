@@ -57,11 +57,11 @@ export function buildModelCandidates(
 	return candidates;
 }
 
-const RETRYABLE_MODEL_FAILURE_PATTERNS = [
-	/rate\s*limit/i,
-	/too many requests/i,
-	/\b429\b/,
-	/quota/i,
+// Misconfiguration, not weather: a different model on the same broken
+// credential or a second typo'd id fails identically, so walking the fallback
+// chain only buries the real cause under N repeated failures. These stop the
+// chain and surface as-is.
+const CONFIG_MODEL_FAILURE_PATTERNS = [
 	/billing/i,
 	/credit/i,
 	/auth(?:entication)?/i,
@@ -70,11 +70,18 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/api key/i,
 	/token expired/i,
 	/invalid key/i,
-	/provider.*unavailable/i,
-	/model.*unavailable/i,
 	/model.*disabled/i,
 	/model.*not found/i,
 	/unknown model/i,
+];
+
+const TRANSIENT_MODEL_FAILURE_PATTERNS = [
+	/rate\s*limit/i,
+	/too many requests/i,
+	/\b429\b/,
+	/quota/i,
+	/provider.*unavailable/i,
+	/model.*unavailable/i,
 	/overloaded/i,
 	/service unavailable/i,
 	/temporar(?:ily)? unavailable/i,
@@ -90,13 +97,28 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/\b504\b/,
 ];
 
+export type ModelFailureKind = "config" | "transient" | "unknown";
+
+export function classifyModelFailure(error: string | undefined): ModelFailureKind {
+	if (!error) return "unknown";
+	if (CONFIG_MODEL_FAILURE_PATTERNS.some((pattern) => pattern.test(error))) return "config";
+	if (TRANSIENT_MODEL_FAILURE_PATTERNS.some((pattern) => pattern.test(error))) return "transient";
+	return "unknown";
+}
+
+export function isConfigModelFailure(error: string | undefined): boolean {
+	return classifyModelFailure(error) === "config";
+}
+
 export function isRetryableModelFailure(error: string | undefined): boolean {
-	if (!error) return false;
-	return RETRYABLE_MODEL_FAILURE_PATTERNS.some((pattern) => pattern.test(error));
+	return classifyModelFailure(error) === "transient";
 }
 
 export function formatModelAttemptNote(attempt: ModelAttemptSummary, nextModel?: string): string {
 	const failure = attempt.error?.trim() || `exit ${attempt.exitCode ?? 1}`;
+	if (isConfigModelFailure(attempt.error)) {
+		return `[config] ${attempt.model} failed: ${failure}. Not retrying — fix the model or credential.`;
+	}
 	return nextModel
 		? `[fallback] ${attempt.model} failed: ${failure}. Retrying with ${nextModel}.`
 		: `[fallback] ${attempt.model} failed: ${failure}.`;

@@ -50,6 +50,7 @@ import { captureSingleOutputSnapshot, formatSavedOutputReference, resolveSingleO
 import {
 	buildModelCandidates,
 	formatModelAttemptNote,
+	isConfigModelFailure,
 	isRetryableModelFailure,
 } from "../shared/model-fallback.ts";
 import {
@@ -919,6 +920,7 @@ export async function runSync(
 			break;
 		}
 		if (!isRetryableModelFailure(result.error) || i === modelsToTry.length - 1) {
+			if (isConfigModelFailure(result.error)) attemptNotes.push(formatModelAttemptNote(attempt));
 			break;
 		}
 		attemptNotes.push(formatModelAttemptNote(attempt, modelsToTry[i + 1]));

@@ -1,5 +1,6 @@
 ---
 name: context-builder
+tier: standard
 description: Analyzes requirements and codebase, generates context and meta-prompt
 tools: read, grep, find, ls, bash, write, web_search, intercom
 thinking: medium

@@ -1,5 +1,6 @@
 ---
 name: researcher
+tier: standard
 description: Autonomous web researcher — searches, evaluates, and synthesizes a focused research brief
 tools: read, write, web_search, fetch_content, get_search_content, intercom
 thinking: medium

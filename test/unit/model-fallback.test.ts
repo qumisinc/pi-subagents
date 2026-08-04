@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
 	buildModelCandidates,
+	classifyModelFailure,
+	formatModelAttemptNote,
+	isConfigModelFailure,
 	isRetryableModelFailure,
 	resolveModelCandidate,
 } from "../../src/runs/shared/model-fallback.ts";
@@ -65,12 +68,43 @@ describe("model fallback helpers", () => {
 	it("detects retryable provider/model failures", () => {
 		assert.equal(isRetryableModelFailure("rate limit exceeded for provider"), true);
 		assert.equal(isRetryableModelFailure("model unavailable"), true);
-		assert.equal(isRetryableModelFailure("authentication failed"), true);
+		assert.equal(isRetryableModelFailure("got status: 503 service unavailable"), true);
 	});
 
 	it("does not treat ordinary task/tool failures as retryable model failures", () => {
 		assert.equal(isRetryableModelFailure("bash failed (exit 1): command not found"), false);
 		assert.equal(isRetryableModelFailure("read failed (exit 1): no such file or directory"), false);
 		assert.equal(isRetryableModelFailure(undefined), false);
+	});
+
+	// A second model on the same broken credential — or a second typo'd id —
+	// fails identically, so retrying only buries the real cause.
+	it("classifies misconfiguration as config, not retryable", () => {
+		for (const error of [
+			"authentication failed",
+			"got status: 401 . {\"error\":\"Unauthorized\",\"code\":\"proxy_token_expired\"}",
+			"403 forbidden",
+			"no API key found for google",
+			"unknown model: google/gemini-typo",
+			"Model google/gemini-3.9-flash not found",
+			"insufficient credit",
+		]) {
+			assert.equal(classifyModelFailure(error), "config", error);
+			assert.equal(isConfigModelFailure(error), true, error);
+			assert.equal(isRetryableModelFailure(error), false, error);
+		}
+	});
+
+	it("classifies capacity and network failures as transient", () => {
+		for (const error of ["429 too many requests", "quota exceeded", "overloaded", "socket hang up", "timed out"]) {
+			assert.equal(classifyModelFailure(error), "transient", error);
+			assert.equal(isRetryableModelFailure(error), true, error);
+		}
+	});
+
+	it("labels a config failure as terminal in the attempt note", () => {
+		const note = formatModelAttemptNote({ model: "google/gemini-typo", success: false, error: "unknown model" });
+		assert.match(note, /^\[config\]/);
+		assert.match(note, /Not retrying/);
 	});
 });

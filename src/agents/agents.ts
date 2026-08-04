@@ -102,9 +102,17 @@ export interface AgentConfig {
 	override?: BuiltinAgentOverrideInfo;
 }
 
+interface SubagentModelDefaults {
+	model?: string;
+	thinking?: string;
+	fallbackModels?: string[];
+}
+
 interface SubagentSettings {
 	overrides: Record<string, BuiltinAgentOverrideConfig>;
 	disableBuiltins?: boolean;
+	defaults?: SubagentModelDefaults;
+	allowPerCallOverride?: boolean;
 }
 
 const EMPTY_SUBAGENT_SETTINGS: SubagentSettings = { overrides: {} };
@@ -390,16 +398,55 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		}
 	}
 
+	let allowPerCallOverride: boolean | undefined;
+	if ("allowPerCallOverride" in subagentsObject) {
+		if (typeof subagentsObject.allowPerCallOverride === "boolean") {
+			allowPerCallOverride = subagentsObject.allowPerCallOverride;
+		} else {
+			throw new Error(`Subagent settings in '${filePath}' have invalid 'allowPerCallOverride'; expected a boolean.`);
+		}
+	}
+
+	const defaults = parseModelDefaults(subagentsObject, filePath);
+
 	const parsed: Record<string, BuiltinAgentOverrideConfig> = {};
 	const agentOverrides = subagentsObject.agentOverrides;
 	if (!agentOverrides || typeof agentOverrides !== "object" || Array.isArray(agentOverrides)) {
-		return { overrides: parsed, disableBuiltins };
+		return { overrides: parsed, disableBuiltins, defaults, allowPerCallOverride };
 	}
 	for (const [name, value] of Object.entries(agentOverrides)) {
 		const override = parseBuiltinOverrideEntry(name, value, filePath);
 		if (override) parsed[name] = override;
 	}
-	return { overrides: parsed, disableBuiltins };
+	return { overrides: parsed, disableBuiltins, defaults, allowPerCallOverride };
+}
+
+function parseModelDefaults(
+	subagentsObject: Record<string, unknown>,
+	filePath: string,
+): SubagentModelDefaults | undefined {
+	const defaults: SubagentModelDefaults = {};
+
+	for (const field of ["defaultModel", "defaultThinking"] as const) {
+		if (!(field in subagentsObject)) continue;
+		const value = subagentsObject[field];
+		if (typeof value !== "string" || !value.trim()) {
+			throw new Error(`Subagent settings in '${filePath}' have invalid '${field}'; expected a non-empty string.`);
+		}
+		if (field === "defaultModel") defaults.model = value.trim();
+		else defaults.thinking = value.trim();
+	}
+
+	if ("defaultFallbackModels" in subagentsObject) {
+		const value = subagentsObject.defaultFallbackModels;
+		if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+			throw new Error(`Subagent settings in '${filePath}' have invalid 'defaultFallbackModels'; expected an array of strings.`);
+		}
+		const items = (value as string[]).map((item) => item.trim()).filter(Boolean);
+		if (items.length > 0) defaults.fallbackModels = items;
+	}
+
+	return Object.keys(defaults).length > 0 ? defaults : undefined;
 }
 
 function applyBuiltinOverride(
@@ -474,6 +521,70 @@ function applyBuiltinOverrides(
 		}
 
 		return agent;
+	});
+}
+
+// User/project agents (files under ~/.agents, <project>/.pi/agents) are matched
+// by name against the same `agentOverrides` map as builtins. Builtins already
+// went through applyBuiltinOverrides before the scope merge — skip anything
+// carrying `override` so `override.base` keeps pointing at the pristine config.
+// `disableBuiltins` deliberately does not reach here; it is a builtins-only switch.
+/** Project scope wins over user scope; unset anywhere means allowed (upstream behavior). */
+export function allowPerCallModelOverride(cwd: string): boolean {
+	const projectSettings = readSubagentSettings(getProjectAgentSettingsPath(cwd));
+	if (projectSettings.allowPerCallOverride !== undefined) return projectSettings.allowPerCallOverride;
+	const userSettings = readSubagentSettings(getUserAgentSettingsPath());
+	return userSettings.allowPerCallOverride ?? true;
+}
+
+function applyScopedAgentOverrides(
+	agents: AgentConfig[],
+	userSettings: SubagentSettings,
+	projectSettings: SubagentSettings,
+	userSettingsPath: string,
+	projectSettingsPath: string | null,
+	builtinNames: Set<string>,
+): AgentConfig[] {
+	return agents.map((agent) => {
+		if (agent.override) return agent;
+		// An agent file shadowing a builtin name is a full replacement; builtin
+		// tuning is not meant to half-apply to it. The defaults floor still does,
+		// so a shadowing agent with no model of its own cannot drift.
+		if (agent.source !== "builtin" && builtinNames.has(agent.name)) return agent;
+
+		const projectOverride = projectSettings.overrides[agent.name];
+		if (projectOverride && projectSettingsPath) {
+			return applyBuiltinOverride(agent, projectOverride, { scope: "project", path: projectSettingsPath });
+		}
+
+		const userOverride = userSettings.overrides[agent.name];
+		if (userOverride) {
+			return applyBuiltinOverride(agent, userOverride, { scope: "user", path: userSettingsPath });
+		}
+
+		return agent;
+	});
+}
+
+// Floor, not an override: fills only what an agent left unset, so a named
+// override or frontmatter always wins. Without this, an agent with no model
+// spawns with no --model and the child Pi CLI silently picks its own default.
+function applyModelDefaults(
+	agents: AgentConfig[],
+	userSettings: SubagentSettings,
+	projectSettings: SubagentSettings,
+): AgentConfig[] {
+	const defaults: SubagentModelDefaults = { ...userSettings.defaults, ...projectSettings.defaults };
+	if (!defaults.model && !defaults.thinking && !defaults.fallbackModels) return agents;
+
+	return agents.map((agent) => {
+		const next = { ...agent };
+		if (!next.model && defaults.model) next.model = defaults.model;
+		if (!next.thinking && defaults.thinking) next.thinking = defaults.thinking;
+		if (!next.fallbackModels?.length && defaults.fallbackModels?.length) {
+			next.fallbackModels = [...defaults.fallbackModels];
+		}
+		return next;
 	});
 }
 
@@ -788,7 +899,16 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const userAgents = [...userAgentsOld, ...userAgentsNew];
 
 	const projectAgents = scope === "user" ? [] : projectAgentDirs.flatMap((dir) => loadAgentsFromDir(dir, "project"));
-	const agents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents)
+	const builtinNames = new Set(builtinAgents.map((agent) => agent.name));
+	const merged = applyScopedAgentOverrides(
+		mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents),
+		userSettings,
+		projectSettings,
+		userSettingsPath,
+		projectSettingsPath,
+		builtinNames,
+	);
+	const agents = applyModelDefaults(merged, userSettings, projectSettings)
 		.filter((agent) => agent.disabled !== true);
 
 	return { agents, projectAgentsDir };
@@ -816,24 +936,36 @@ export function discoverAgentsAll(cwd: string): {
 	const userSettings = readSubagentSettings(userSettingsPath);
 	const projectSettings = readSubagentSettings(projectSettingsPath);
 
-	const builtin = applyBuiltinOverrides(
-		loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin"),
+	const builtin = applyModelDefaults(
+		applyBuiltinOverrides(
+			loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin"),
+			userSettings,
+			projectSettings,
+			userSettingsPath,
+			projectSettingsPath,
+		),
 		userSettings,
 		projectSettings,
-		userSettingsPath,
-		projectSettingsPath,
 	);
-	const user = [
+	const builtinNames = new Set(builtin.map((agent) => agent.name));
+	const applyScoped = (agents: AgentConfig[]) =>
+		applyModelDefaults(
+			applyScopedAgentOverrides(agents, userSettings, projectSettings, userSettingsPath, projectSettingsPath, builtinNames),
+			userSettings,
+			projectSettings,
+		);
+
+	const user = applyScoped([
 		...loadAgentsFromDir(userDirOld, "user"),
 		...loadAgentsFromDir(userDirNew, "user"),
-	];
+	]);
 	const projectMap = new Map<string, AgentConfig>();
 	for (const dir of projectDirs) {
 		for (const agent of loadAgentsFromDir(dir, "project")) {
 			projectMap.set(agent.name, agent);
 		}
 	}
-	const project = Array.from(projectMap.values());
+	const project = applyScoped(Array.from(projectMap.values()));
 
 	const chainMap = new Map<string, ChainConfig>();
 	for (const dir of projectChainDirs) {
