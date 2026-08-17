@@ -63,7 +63,7 @@ import {
 	shouldEscalateMutatingFailures,
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
-import { getSubagentLifecycleCallbacks, type ProgressSnapshot } from "../../shared/lifecycle-types.ts";
+import { getSubagentLifecycleCallbacks, parseChildThinkingEvent, type ProgressSnapshot } from "../../shared/lifecycle-types.ts";
 
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 
@@ -448,12 +448,39 @@ async function runSingleAttempt(
 			} catch { /* callback errors must not affect execution */ }
 		};
 
+		const fireLifecycleThinking = (evt: unknown) => {
+			if (!options.toolCallId) return;
+			const thinking = parseChildThinkingEvent(evt);
+			if (!thinking) return;
+			const callbacks = getSubagentLifecycleCallbacks();
+			if (!callbacks) return;
+			try {
+				if (thinking.kind === "delta") {
+					callbacks.onChildThinkingDelta?.(options.toolCallId, agent.name, {
+						contentIndex: thinking.contentIndex,
+						delta: thinking.delta,
+					});
+				} else {
+					callbacks.onChildThinkingEnd?.(options.toolCallId, agent.name, {
+						contentIndex: thinking.contentIndex,
+						content: thinking.content,
+					});
+				}
+			} catch { /* callback errors must not affect execution */ }
+		};
+
 		const processLine = (line: string) => {
 			if (!line.trim()) return;
 			jsonlWriter.writeLine(line);
-			let evt: { type?: string; message?: Message; toolName?: string; args?: unknown };
+			let evt: {
+				type?: string;
+				message?: Message;
+				toolName?: string;
+				args?: unknown;
+				assistantMessageEvent?: { type?: string; contentIndex?: number; delta?: string; content?: string };
+			};
 			try {
-				evt = JSON.parse(line) as { type?: string; message?: Message; toolName?: string; args?: unknown };
+				evt = JSON.parse(line) as typeof evt;
 			} catch {
 				// Non-JSON stdout lines are expected; only structured events are parsed.
 				return;
@@ -463,6 +490,16 @@ async function runSingleAttempt(
 			progress.durationMs = now - startTime;
 			progress.lastActivityAt = now;
 			updateActivityState(now);
+
+			// Reasoning deltas are the highest-volume event on this stream and
+			// mean nothing to the progress bookkeeping below — but they must
+			// still refresh `lastActivityAt` above, or a child that thinks for a
+			// long stretch without calling a tool looks idle to
+			// `deriveActivityState` and trips needs_attention.
+			if (evt.type === "message_update") {
+				fireLifecycleThinking(evt);
+				return;
+			}
 
 			if (evt.type === "tool_execution_start") {
 				const toolArgs = evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
