@@ -6,11 +6,7 @@ import {
 	setSubagentLifecycleCallbacks,
 } from "../../src/shared/lifecycle-types.ts";
 
-// Children run as `pi --mode json -p`; reasoning arrives on stdout as
-// `message_update` wrapping the provider's delta stream. Before these
-// callbacks the only reasoning a host could see was the completed block in the
-// child's session file, which lands at turn boundaries — so a single-turn child
-// surfaced nothing until it was done.
+// Reasoning arrives on a child's stdout as `message_update` wrapping the provider's delta stream.
 
 function update(inner: Record<string, unknown>): unknown {
 	return { type: "message_update", assistantMessageEvent: inner };

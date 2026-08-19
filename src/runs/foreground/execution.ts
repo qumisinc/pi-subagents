@@ -491,11 +491,8 @@ async function runSingleAttempt(
 			progress.lastActivityAt = now;
 			updateActivityState(now);
 
-			// Reasoning deltas are the highest-volume event on this stream and
-			// mean nothing to the progress bookkeeping below — but they must
-			// still refresh `lastActivityAt` above, or a child that thinks for a
-			// long stretch without calling a tool looks idle to
-			// `deriveActivityState` and trips needs_attention.
+			// Must refresh lastActivityAt (above) before returning, or a child
+			// thinking without tool calls looks idle and trips needs_attention.
 			if (evt.type === "message_update") {
 				fireLifecycleThinking(evt);
 				return;
