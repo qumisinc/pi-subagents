@@ -64,6 +64,21 @@ test("rejects malformed shapes rather than emitting a partial event", () => {
 		parseChildThinkingEvent(update({ type: "thinking_delta", contentIndex: 0, delta: 42 })),
 		null,
 	);
+	// contentIndex must be a non-negative integer — a NaN or negative index
+	// can't address a block, and NaN in particular breaks in-place growth on a
+	// host that looks blocks up by content index (NaN !== NaN).
+	assert.equal(
+		parseChildThinkingEvent(update({ type: "thinking_delta", contentIndex: NaN, delta: "x" })),
+		null,
+	);
+	assert.equal(
+		parseChildThinkingEvent(update({ type: "thinking_delta", contentIndex: -1, delta: "x" })),
+		null,
+	);
+	assert.equal(
+		parseChildThinkingEvent(update({ type: "thinking_delta", contentIndex: 1.5, delta: "x" })),
+		null,
+	);
 });
 
 test("the new callbacks round-trip through the global registry", () => {

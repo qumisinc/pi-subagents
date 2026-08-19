@@ -88,7 +88,7 @@ export function parseChildThinkingEvent(evt: unknown): ChildThinkingEvent | null
 		delta?: unknown;
 		content?: unknown;
 	};
-	if (typeof contentIndex !== "number") return null;
+	if (typeof contentIndex !== "number" || !Number.isInteger(contentIndex) || contentIndex < 0) return null;
 	if (type === "thinking_delta" && typeof delta === "string") {
 		return { kind: "delta", contentIndex, delta };
 	}
