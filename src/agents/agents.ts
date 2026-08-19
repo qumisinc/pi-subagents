@@ -398,12 +398,15 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		}
 	}
 
+	// Lenient for the same reason as parseModelDefaults below: this field is
+	// written by a deployment's tooling, and a bad value must not make every
+	// agent undiscoverable. Ignoring it falls back to the upstream default.
 	let allowPerCallOverride: boolean | undefined;
 	if ("allowPerCallOverride" in subagentsObject) {
 		if (typeof subagentsObject.allowPerCallOverride === "boolean") {
 			allowPerCallOverride = subagentsObject.allowPerCallOverride;
 		} else {
-			throw new Error(`Subagent settings in '${filePath}' have invalid 'allowPerCallOverride'; expected a boolean.`);
+			console.error(`[subagent] ignoring invalid 'allowPerCallOverride' in '${filePath}'; expected a boolean.`);
 		}
 	}
 
@@ -421,17 +424,23 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 	return { overrides: parsed, disableBuiltins, defaults, allowPerCallOverride };
 }
 
+// Deliberately LENIENT, unlike the strict parsing around it. 
+// A bad value is skipped with a warning and the rest still applies.
 function parseModelDefaults(
 	subagentsObject: Record<string, unknown>,
 	filePath: string,
 ): SubagentModelDefaults | undefined {
 	const defaults: SubagentModelDefaults = {};
+	const reject = (field: string, expected: string) => {
+		console.error(`[subagent] ignoring invalid '${field}' in '${filePath}'; expected ${expected}.`);
+	};
 
 	for (const field of ["defaultModel", "defaultThinking"] as const) {
 		if (!(field in subagentsObject)) continue;
 		const value = subagentsObject[field];
 		if (typeof value !== "string" || !value.trim()) {
-			throw new Error(`Subagent settings in '${filePath}' have invalid '${field}'; expected a non-empty string.`);
+			reject(field, "a non-empty string");
+			continue;
 		}
 		if (field === "defaultModel") defaults.model = value.trim();
 		else defaults.thinking = value.trim();
@@ -440,10 +449,11 @@ function parseModelDefaults(
 	if ("defaultFallbackModels" in subagentsObject) {
 		const value = subagentsObject.defaultFallbackModels;
 		if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-			throw new Error(`Subagent settings in '${filePath}' have invalid 'defaultFallbackModels'; expected an array of strings.`);
+			reject("defaultFallbackModels", "an array of strings");
+		} else {
+			const items = (value as string[]).map((item) => item.trim()).filter(Boolean);
+			if (items.length > 0) defaults.fallbackModels = items;
 		}
-		const items = (value as string[]).map((item) => item.trim()).filter(Boolean);
-		if (items.length > 0) defaults.fallbackModels = items;
 	}
 
 	return Object.keys(defaults).length > 0 ? defaults : undefined;
@@ -524,17 +534,19 @@ function applyBuiltinOverrides(
 	});
 }
 
-// User/project agents (files under ~/.agents, <project>/.pi/agents) are matched
-// by name against the same `agentOverrides` map as builtins. Builtins already
-// went through applyBuiltinOverrides before the scope merge — skip anything
-// carrying `override` so `override.base` keeps pointing at the pristine config.
-// `disableBuiltins` deliberately does not reach here; it is a builtins-only switch.
-/** Project scope wins over user scope; unset anywhere means allowed (upstream behavior). */
+
 export function allowPerCallModelOverride(cwd: string): boolean {
-	const projectSettings = readSubagentSettings(getProjectAgentSettingsPath(cwd));
-	if (projectSettings.allowPerCallOverride !== undefined) return projectSettings.allowPerCallOverride;
-	const userSettings = readSubagentSettings(getUserAgentSettingsPath());
-	return userSettings.allowPerCallOverride ?? true;
+	try {
+		const projectSettings = readSubagentSettings(getProjectAgentSettingsPath(cwd));
+		if (projectSettings.allowPerCallOverride !== undefined) return projectSettings.allowPerCallOverride;
+	} catch {
+		// fall through to user scope
+	}
+	try {
+		return readSubagentSettings(getUserAgentSettingsPath()).allowPerCallOverride ?? true;
+	} catch {
+		return true;
+	}
 }
 
 function applyScopedAgentOverrides(

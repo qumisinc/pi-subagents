@@ -170,15 +170,41 @@ describe("model policy: overrides and defaults across scopes", () => {
 		assert.equal(findAgent("Retired Line"), undefined);
 	});
 
-	it("rejects malformed policy fields instead of silently ignoring them", () => {
-		writeProjectSettings({ subagents: { defaultModel: 5 } });
-		assert.throws(() => discoverAgents(tempProject, "both"), /invalid 'defaultModel'/);
+	// A malformed floor must mean "no floor", never a throw out of settings
+	// parsing — that would make every agent undiscoverable and break dispatch
+	// entirely, which is strictly worse than the misconfiguration it reports.
+	it("ignores malformed policy fields instead of breaking agent discovery", () => {
+		for (const subagents of [
+			{ defaultModel: 5 },
+			{ defaultModel: "   " },
+			{ defaultFallbackModels: "google/one" },
+			{ defaultFallbackModels: ["google/one", 7] },
+			{ defaultThinking: {} },
+			{ allowPerCallOverride: "false" },
+		] as Record<string, unknown>[]) {
+			writeProjectSettings({ subagents });
+			const agents = discoverAgents(tempProject, "both").agents;
+			assert.ok(agents.length > 0, `discovery returned nothing for ${JSON.stringify(subagents)}`);
+		}
+	});
 
-		writeProjectSettings({ subagents: { defaultFallbackModels: "google/one" } });
-		assert.throws(() => discoverAgents(tempProject, "both"), /invalid 'defaultFallbackModels'/);
+	it("applies the valid part of a partially malformed defaults block", () => {
+		writeProjectSettings({
+			subagents: { defaultModel: "google/floor", defaultFallbackModels: "not-an-array" },
+		});
+		const scout = discoverAgents(tempProject, "both").agents.find((a) => a.name === "scout");
+		assert.equal(scout?.model, "google/floor");
+		assert.equal(scout?.fallbackModels, undefined);
+	});
 
+	it("treats an unusable allowPerCallOverride as the upstream default", () => {
 		writeProjectSettings({ subagents: { allowPerCallOverride: "false" } });
-		assert.throws(() => discoverAgents(tempProject, "both"), /invalid 'allowPerCallOverride'/);
+		assert.equal(allowPerCallModelOverride(tempProject), true);
+	});
+
+	it("never throws out of allowPerCallModelOverride on an unparseable settings file", () => {
+		fs.writeFileSync(path.join(tempProject, ".pi", "settings.json"), "{ not json");
+		assert.equal(allowPerCallModelOverride(tempProject), true);
 	});
 
 	it("allowPerCallOverride defaults to true and is settable per scope", () => {
