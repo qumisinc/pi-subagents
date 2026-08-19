@@ -27,6 +27,50 @@ export interface SubagentLifecycleCallbacks {
 		metaPath: string,
 		opts: { index: number; runId: string },
 	) => void;
+	/** A child's reasoning delta. Fired once per delta (coalesce before expensive work); `contentIndex` identifies the block. */
+	onChildThinkingDelta?: (
+		toolCallId: string,
+		agentName: string,
+		delta: { contentIndex: number; delta: string },
+	) => void;
+	/** A child's reasoning block is complete; `content` is authoritative — replace accumulated deltas with it. */
+	onChildThinkingEnd?: (
+		toolCallId: string,
+		agentName: string,
+		block: { contentIndex: number; content: string },
+	) => void;
+}
+
+/** A reasoning event classified off a child's `message_update` stdout line. */
+export type ChildThinkingEvent =
+	| { kind: "delta"; contentIndex: number; delta: string }
+	| { kind: "end"; contentIndex: number; content: string };
+
+/**
+ * Classify a child's `message_update` stdout line as a reasoning event, else null.
+ * Matches narrowly (only `thinking_delta` / `thinking_end`) so the assistant's
+ * visible answer never reaches the reasoning channel.
+ */
+export function parseChildThinkingEvent(evt: unknown): ChildThinkingEvent | null {
+	if (!evt || typeof evt !== "object") return null;
+	const outer = evt as { type?: unknown; assistantMessageEvent?: unknown };
+	if (outer.type !== "message_update") return null;
+	const inner = outer.assistantMessageEvent;
+	if (!inner || typeof inner !== "object") return null;
+	const { type, contentIndex, delta, content } = inner as {
+		type?: unknown;
+		contentIndex?: unknown;
+		delta?: unknown;
+		content?: unknown;
+	};
+	if (typeof contentIndex !== "number" || !Number.isSafeInteger(contentIndex) || contentIndex < 0) return null;
+	if (type === "thinking_delta" && typeof delta === "string") {
+		return { kind: "delta", contentIndex, delta };
+	}
+	if (type === "thinking_end") {
+		return { kind: "end", contentIndex, content: typeof content === "string" ? content : "" };
+	}
+	return null;
 }
 
 const GLOBAL_KEY = "__piSubagentLifecycleCallbacks";
