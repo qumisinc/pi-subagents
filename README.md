@@ -24,18 +24,14 @@ Fixes a context inheritance gap caused by the Pi SDK's `resource-loader.ts`, whe
 
 The fix is in `buildPiArgs()` (`src/runs/shared/pi-args.ts`): when `systemPromptMode === "append"`, it reads `{cwd}/.pi/APPEND_SYSTEM.md` from disk and prepends it to the agent body before writing the temp file. This ensures the single CLI flag carries both the gateway prompt and the agent's own instructions.
 
-**3. Deterministic model selection for every agent**
+**3. A model for every subagent**
 
-Upstream applies `subagents.agentOverrides` only to the bundled builtin agents. User and project agents — including the line-of-business specialists the Qumis gateway injects into `/workspace/.pi/agents/` — were unreachable, so they spawned with no `--model` flag and the child Pi CLI silently selected its own provider default. This fork closes that:
+Upstream applies `subagents.agentOverrides` only to the bundled builtin agents. User and project agents — including the line-of-business specialists the Qumis gateway injects into `/workspace/.pi/agents/` — were unreachable, so they spawned with no `--model` flag and the child Pi CLI silently selected its own provider default. This fork closes that with two additions:
 
 | Addition | Behavior |
 |---|---|
-| `agentOverrides` for user/project agents | Named overrides now match any discovered agent, not just builtins. An agent file that *shadows* a builtin name stays exempt (a full replacement should not inherit builtin tuning). |
-| `subagents.defaultModel` / `defaultThinking` / `defaultFallbackModels` | A floor, not an override — fills only what an agent left unset, so frontmatter and named overrides always win. Guarantees no agent reaches the CLI's own default, including agents created after startup. |
-| `subagents.allowPerCallOverride` | When `false`, a `model` supplied in a `subagent()` call is dropped (with a stderr note) so the deployed model set is deterministic. Defaults to `true` (upstream behavior). |
-| Config vs transient failure split | `model-fallback.ts` no longer treats auth failures, missing API keys, and unknown model ids as retryable. Misconfiguration stops the fallback chain and is reported as `[config]` instead of being buried under N identical retries. |
-
-Builtin agent files also declare a `tier:` field (`utility`, `standard`, `reasoning`). The fork itself ignores it — it is consumed by the Qumis gateway, which maps tier → concrete model so model ids live in one policy document rather than in 24 agent files.
+| `agentOverrides` for user/project agents | Named overrides now match any discovered agent, not just builtins. An agent file that *shadows* a builtin name stays exempt (a full replacement should not inherit builtin tuning), but still receives the floor below. |
+| `subagents.defaultModel` | A model floor, not an override — fills only the model an agent left unset, so frontmatter and named overrides always win. Guarantees no agent reaches the CLI's own default, including agents created after startup. Project scope beats user scope; a malformed value means "no floor", never a parse throw. |
 
 ### Context inheritance in the Qumis sandbox
 

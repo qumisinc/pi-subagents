@@ -1,6 +1,5 @@
 ---
 name: oracle
-tier: reasoning
 description: High-context decision-consistency oracle that protects inherited state and prevents drift
 tools: read, grep, find, ls, bash, intercom
 thinking: high

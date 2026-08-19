@@ -1,6 +1,5 @@
 ---
 name: delegate
-tier: utility
 description: Lightweight subagent that inherits the parent model with no default reads
 systemPromptMode: append
 inheritProjectContext: true

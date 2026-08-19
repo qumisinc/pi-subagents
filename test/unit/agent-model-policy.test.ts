@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { allowPerCallModelOverride, discoverAgents, discoverAgentsAll } from "../../src/agents/agents.ts";
+import { discoverAgents, discoverAgentsAll } from "../../src/agents/agents.ts";
 
 let tempHome = "";
 let tempProject = "";
@@ -29,7 +29,7 @@ function findAgent(name: string) {
 	return discoverAgents(tempProject, "both").agents.find((agent) => agent.name === name);
 }
 
-describe("model policy: overrides and defaults across scopes", () => {
+describe("subagent model config: overrides and the model floor across scopes", () => {
 	beforeEach(() => {
 		tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-policy-home-"));
 		tempProject = fs.mkdtempSync(path.join(os.tmpdir(), "pi-policy-project-"));
@@ -51,7 +51,7 @@ describe("model policy: overrides and defaults across scopes", () => {
 	// specialists) were unreachable by agentOverrides, so they spawned with no
 	// --model and the child Pi CLI picked its own default.
 	it("applies agentOverrides to project agents, not just builtins", () => {
-		writeProjectAgent("Cyber Liability", "thinking: high\n");
+		writeProjectAgent("Cyber Liability", "");
 		writeProjectSettings({
 			subagents: { agentOverrides: { "Cyber Liability": { model: "google/gemini-3.6-flash" } } },
 		});
@@ -68,13 +68,12 @@ describe("model policy: overrides and defaults across scopes", () => {
 		fs.mkdirSync(path.dirname(userAgentPath), { recursive: true });
 		fs.writeFileSync(userAgentPath, "---\nname: helper\ndescription: helper\n---\n\nBody.\n", "utf-8");
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: { agentOverrides: { helper: { model: "google/gemini-3.6-flash", thinking: "low" } } },
+			subagents: { agentOverrides: { helper: { model: "google/gemini-3.6-flash" } } },
 		});
 
 		const helper = findAgent("helper");
 		assert.ok(helper);
 		assert.equal(helper.model, "google/gemini-3.6-flash");
-		assert.equal(helper.thinking, "low");
 		assert.equal(helper.override?.scope, "user");
 	});
 
@@ -96,13 +95,11 @@ describe("model policy: overrides and defaults across scopes", () => {
 		writeProjectSettings({
 			subagents: {
 				defaultModel: "google/gemini-3.6-flash",
-				defaultThinking: "medium",
 				agentOverrides: { scout: { model: "google/pinned-by-override" } },
 			},
 		});
 
 		assert.equal(findAgent("Surety")?.model, "google/gemini-3.6-flash");
-		assert.equal(findAgent("Surety")?.thinking, "medium");
 		// frontmatter model survives the floor
 		assert.equal(findAgent("Aviation")?.model, "google/gemini-3.1-pro-preview");
 		// named override survives the floor
@@ -111,23 +108,7 @@ describe("model policy: overrides and defaults across scopes", () => {
 		assert.equal(findAgent("delegate")?.model, "google/gemini-3.6-flash");
 	});
 
-	it("defaultThinking does not overwrite an agent's own thinking level", () => {
-		writeProjectSettings({ subagents: { defaultThinking: "low" } });
-		// scout declares thinking: low, oracle declares high — floor must not flatten oracle
-		assert.equal(findAgent("oracle")?.thinking, "high");
-	});
-
-	it("defaultFallbackModels fills only when the agent has none", () => {
-		writeProjectAgent("Builders Risk", "fallbackModels: google/own-fallback\n");
-		writeProjectSettings({
-			subagents: { defaultModel: "google/primary", defaultFallbackModels: ["google/floor-fallback"] },
-		});
-
-		assert.deepEqual(findAgent("Builders Risk")?.fallbackModels, ["google/own-fallback"]);
-		assert.deepEqual(findAgent("worker")?.fallbackModels, ["google/floor-fallback"]);
-	});
-
-	it("project settings defaults win over user settings defaults", () => {
+	it("project settings defaultModel wins over user settings defaultModel", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: { defaultModel: "google/from-user" },
 		});
@@ -173,14 +154,12 @@ describe("model policy: overrides and defaults across scopes", () => {
 	// A malformed floor must mean "no floor", never a throw out of settings
 	// parsing — that would make every agent undiscoverable and break dispatch
 	// entirely, which is strictly worse than the misconfiguration it reports.
-	it("ignores malformed policy fields instead of breaking agent discovery", () => {
+	it("ignores a malformed defaultModel instead of breaking agent discovery", () => {
 		for (const subagents of [
 			{ defaultModel: 5 },
 			{ defaultModel: "   " },
-			{ defaultFallbackModels: "google/one" },
-			{ defaultFallbackModels: ["google/one", 7] },
-			{ defaultThinking: {} },
-			{ allowPerCallOverride: "false" },
+			{ defaultModel: {} },
+			{ defaultModel: [] },
 		] as Record<string, unknown>[]) {
 			writeProjectSettings({ subagents });
 			const agents = discoverAgents(tempProject, "both").agents;
@@ -188,34 +167,11 @@ describe("model policy: overrides and defaults across scopes", () => {
 		}
 	});
 
-	it("applies the valid part of a partially malformed defaults block", () => {
+	it("applies a valid defaultModel even when other keys are junk", () => {
 		writeProjectSettings({
-			subagents: { defaultModel: "google/floor", defaultFallbackModels: "not-an-array" },
+			subagents: { defaultModel: "google/floor", unknownKey: "not-an-array" },
 		});
 		const scout = discoverAgents(tempProject, "both").agents.find((a) => a.name === "scout");
 		assert.equal(scout?.model, "google/floor");
-		assert.equal(scout?.fallbackModels, undefined);
-	});
-
-	it("treats an unusable allowPerCallOverride as the upstream default", () => {
-		writeProjectSettings({ subagents: { allowPerCallOverride: "false" } });
-		assert.equal(allowPerCallModelOverride(tempProject), true);
-	});
-
-	it("never throws out of allowPerCallModelOverride on an unparseable settings file", () => {
-		fs.writeFileSync(path.join(tempProject, ".pi", "settings.json"), "{ not json");
-		assert.equal(allowPerCallModelOverride(tempProject), true);
-	});
-
-	it("allowPerCallOverride defaults to true and is settable per scope", () => {
-		assert.equal(allowPerCallModelOverride(tempProject), true);
-
-		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: { allowPerCallOverride: false },
-		});
-		assert.equal(allowPerCallModelOverride(tempProject), false);
-
-		writeProjectSettings({ subagents: { allowPerCallOverride: true } });
-		assert.equal(allowPerCallModelOverride(tempProject), true);
 	});
 });

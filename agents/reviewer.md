@@ -1,6 +1,5 @@
 ---
 name: reviewer
-tier: reasoning
 description: Versatile review specialist for code diffs, plans, proposed solutions, codebase health, and PR/issue validation
 tools: read, grep, find, ls, bash, edit, write, intercom
 thinking: high

@@ -104,15 +104,12 @@ export interface AgentConfig {
 
 interface SubagentModelDefaults {
 	model?: string;
-	thinking?: string;
-	fallbackModels?: string[];
 }
 
 interface SubagentSettings {
 	overrides: Record<string, BuiltinAgentOverrideConfig>;
 	disableBuiltins?: boolean;
 	defaults?: SubagentModelDefaults;
-	allowPerCallOverride?: boolean;
 }
 
 const EMPTY_SUBAGENT_SETTINGS: SubagentSettings = { overrides: {} };
@@ -398,61 +395,34 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		}
 	}
 
-	// Lenient for the same reason as parseModelDefaults below: this field is
-	// written by a deployment's tooling, and a bad value must not make every
-	// agent undiscoverable. Ignoring it falls back to the upstream default.
-	let allowPerCallOverride: boolean | undefined;
-	if ("allowPerCallOverride" in subagentsObject) {
-		if (typeof subagentsObject.allowPerCallOverride === "boolean") {
-			allowPerCallOverride = subagentsObject.allowPerCallOverride;
-		} else {
-			console.error(`[subagent] ignoring invalid 'allowPerCallOverride' in '${filePath}'; expected a boolean.`);
-		}
-	}
-
 	const defaults = parseModelDefaults(subagentsObject, filePath);
 
 	const parsed: Record<string, BuiltinAgentOverrideConfig> = {};
 	const agentOverrides = subagentsObject.agentOverrides;
 	if (!agentOverrides || typeof agentOverrides !== "object" || Array.isArray(agentOverrides)) {
-		return { overrides: parsed, disableBuiltins, defaults, allowPerCallOverride };
+		return { overrides: parsed, disableBuiltins, defaults };
 	}
 	for (const [name, value] of Object.entries(agentOverrides)) {
 		const override = parseBuiltinOverrideEntry(name, value, filePath);
 		if (override) parsed[name] = override;
 	}
-	return { overrides: parsed, disableBuiltins, defaults, allowPerCallOverride };
+	return { overrides: parsed, disableBuiltins, defaults };
 }
 
-// Deliberately LENIENT, unlike the strict parsing around it. 
-// A bad value is skipped with a warning and the rest still applies.
+// Deliberately LENIENT, unlike the strict parsing around it.
+// A bad value is skipped with a warning; it never makes agents undiscoverable.
 function parseModelDefaults(
 	subagentsObject: Record<string, unknown>,
 	filePath: string,
 ): SubagentModelDefaults | undefined {
 	const defaults: SubagentModelDefaults = {};
-	const reject = (field: string, expected: string) => {
-		console.error(`[subagent] ignoring invalid '${field}' in '${filePath}'; expected ${expected}.`);
-	};
 
-	for (const field of ["defaultModel", "defaultThinking"] as const) {
-		if (!(field in subagentsObject)) continue;
-		const value = subagentsObject[field];
+	if ("defaultModel" in subagentsObject) {
+		const value = subagentsObject.defaultModel;
 		if (typeof value !== "string" || !value.trim()) {
-			reject(field, "a non-empty string");
-			continue;
-		}
-		if (field === "defaultModel") defaults.model = value.trim();
-		else defaults.thinking = value.trim();
-	}
-
-	if ("defaultFallbackModels" in subagentsObject) {
-		const value = subagentsObject.defaultFallbackModels;
-		if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-			reject("defaultFallbackModels", "an array of strings");
+			console.error(`[subagent] ignoring invalid 'defaultModel' in '${filePath}'; expected a non-empty string.`);
 		} else {
-			const items = (value as string[]).map((item) => item.trim()).filter(Boolean);
-			if (items.length > 0) defaults.fallbackModels = items;
+			defaults.model = value.trim();
 		}
 	}
 
@@ -534,21 +504,6 @@ function applyBuiltinOverrides(
 	});
 }
 
-
-export function allowPerCallModelOverride(cwd: string): boolean {
-	try {
-		const projectSettings = readSubagentSettings(getProjectAgentSettingsPath(cwd));
-		if (projectSettings.allowPerCallOverride !== undefined) return projectSettings.allowPerCallOverride;
-	} catch {
-		// fall through to user scope
-	}
-	try {
-		return readSubagentSettings(getUserAgentSettingsPath()).allowPerCallOverride ?? true;
-	} catch {
-		return true;
-	}
-}
-
 function applyScopedAgentOverrides(
 	agents: AgentConfig[],
 	userSettings: SubagentSettings,
@@ -578,7 +533,7 @@ function applyScopedAgentOverrides(
 	});
 }
 
-// Floor, not an override: fills only what an agent left unset, so a named
+// Floor, not an override: fills only the model an agent left unset, so a named
 // override or frontmatter always wins. Without this, an agent with no model
 // spawns with no --model and the child Pi CLI silently picks its own default.
 function applyModelDefaults(
@@ -587,16 +542,11 @@ function applyModelDefaults(
 	projectSettings: SubagentSettings,
 ): AgentConfig[] {
 	const defaults: SubagentModelDefaults = { ...userSettings.defaults, ...projectSettings.defaults };
-	if (!defaults.model && !defaults.thinking && !defaults.fallbackModels) return agents;
+	if (!defaults.model) return agents;
 
 	return agents.map((agent) => {
-		const next = { ...agent };
-		if (!next.model && defaults.model) next.model = defaults.model;
-		if (!next.thinking && defaults.thinking) next.thinking = defaults.thinking;
-		if (!next.fallbackModels?.length && defaults.fallbackModels?.length) {
-			next.fallbackModels = [...defaults.fallbackModels];
-		}
-		return next;
+		if (agent.model) return agent;
+		return { ...agent, model: defaults.model };
 	});
 }
 

@@ -2,7 +2,7 @@
   "name": "pi-subagents",
   "version": "0.25.0",
   "qumis": {
-    "forkId": "qumisinc/pi-subagents@model-policy",
+    "forkId": "qumisinc/pi-subagents@extensions-override",
     "upstream": "nicobailon/pi-subagents@0.25.0"
   },
   "description": "Pi extension for delegating tasks to subagents with chains, parallel execution, and TUI clarification",
