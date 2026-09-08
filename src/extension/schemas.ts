@@ -46,6 +46,13 @@ const TaskItem = Type.Object({
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking for this task" })),
 	model: Type.Optional(Type.String({ description: "Override model for this task (e.g. 'google/gemini-3-pro')" })),
 	skill: Type.Optional(SkillOverride),
+}, {
+	// Strict: a model emitting corrupted JSON around array element boundaries
+	// (`"},{"agent":` degrading into `,"{agent":`) collapses N tasks into one
+	// object with junk keys. With additionalProperties unset that object
+	// validates, one task runs, and the parallelism loss is silent. Reject it
+	// so the model gets an actionable error and can re-emit the call.
+	additionalProperties: false,
 });
 
 // Parallel task item (within a parallel step)
@@ -60,6 +67,9 @@ const ParallelTaskSchema = Type.Object({
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for this task" })),
+}, {
+	// Strict for the same reason as TaskItem above.
+	additionalProperties: false,
 });
 
 // Flattened so chain steps do not need an object-shape anyOf/oneOf union.
